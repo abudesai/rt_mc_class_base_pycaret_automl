@@ -38,7 +38,6 @@ class ModelServer:
         return preds_df
 
     def predict_proba(self, data):
-        print(data.shape)
         preds = self._get_predictions(data)
         preds_df = data[[self.id_field_name]].copy()
         for c in preds.columns:
