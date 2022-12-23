@@ -1,0 +1,13 @@
+# data handling
+pandas
+pycaret
+
+
+# model
+scikit-optimize
+feature-engine
+
+# web application
+python-multipart
+fastapi
+uvicorn[standard]
