@@ -1,19 +1,8 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-    :brief: this script is useful for doing the algorithm testing locally without needing
-            to build the docker image and run the container.
-            make sure you create your virtual environment, install the dependencies
-            from requirements.txt file, and then use that virtual env to do your testing.
-            This isnt foolproof. You can still have host os and python version related issues, so beware.
-"""
-import os
-import shutil
+import os, shutil
 import sys
 import time
-
-import numpy as np
-import pandas as pd
+import pandas as pd, numpy as np
+import pprint
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
@@ -23,12 +12,13 @@ from sklearn.metrics import (
 )
 
 sys.path.insert(0, "./../app")
-import algorithm.model.classifier as classifier
-import algorithm.model_server as model_server
+import algorithm.utils as utils
 import algorithm.model_trainer as model_trainer
+import algorithm.model_server as model_server
 import algorithm.model_tuner as model_tuner
 import algorithm.preprocessing.pipeline as pipeline
-import algorithm.utils as utils
+import algorithm.model.mc_classifier as mc_classifier
+
 
 inputs_path = "./ml_vol/inputs/"
 
@@ -57,8 +47,18 @@ if not os.path.exists(test_results_path):
 
 
 # change this to whereever you placed your local testing datasets
-local_datapath = "../datasets"
-model_name = classifier.MODEL_NAME
+local_datapath = "./../../datasets"
+
+
+"""
+this script is useful for doing the algorithm testing locally without needing 
+to build the docker image and run the container.
+make sure you create your virtual environment, install the dependencies
+from requirements.txt file, and then use that virtual env to do your testing. 
+This isnt foolproof. You can still have host os, or python-version related issues, so beware.
+"""
+
+model_name = mc_classifier.MODEL_NAME
 
 
 def create_ml_vol():
@@ -143,7 +143,7 @@ def train_and_save_algo():
     # Save the processing pipeline
     pipeline.save_preprocessor(preprocessor, model_artifacts_path)
     # Save the model
-    classifier.save_model(model, model_artifacts_path)
+    mc_classifier.save_model(model, model_artifacts_path)
     print("done with training")
 
 
@@ -157,9 +157,7 @@ def load_and_test_algo():
     # make predictions
     predictions = predictor.predict_proba(test_data)
     # save predictions
-    predictions.to_csv(
-        os.path.join(testing_outputs_path, "test_predictions.csv"), index=False
-    )
+    utils.save_dataframe(predictions, testing_outputs_path, "test_predictions.csv")
     # local explanations
     if hasattr(predictor, "has_local_explanations"):
         # will only return explanations for max 5 rows - will select the top 5 if given more rows
@@ -181,35 +179,44 @@ def get_test_key():
 
 
 def score(test_key, predictions, data_schema):
-
+    # we need to get a couple of field names in the test_data file to do the scoring
+    # we get it using the schema file
     id_field = data_schema["inputDatasets"]["multiClassClassificationBaseMainInput"][
         "idField"
     ]
-    target_class = str(
-        data_schema["inputDatasets"]["multiClassClassificationBaseMainInput"][
-            "targetClass"
-        ]
-    )
     target_field = data_schema["inputDatasets"][
         "multiClassClassificationBaseMainInput"
     ]["targetField"]
 
-    pred_class_names = [str(c) for c in predictions.columns[1:]]
-    predictions.columns = [str(c) for c in list(predictions.columns)]
+    pred_class_names = [c for c in predictions.columns[1:]]
+
     predictions["__pred_class"] = pd.DataFrame(
         predictions[pred_class_names], columns=pred_class_names
     ).idxmax(axis=1)
     predictions = predictions.merge(test_key[[id_field, target_field]], on=[id_field])
+    predictions = predictions[predictions[target_field].isin(pred_class_names)]
 
     Y = predictions[target_field].astype(str)
     Y_hat = predictions["__pred_class"].astype(str)
 
     accu = accuracy_score(Y, Y_hat)
-    f1 = f1_score(Y, Y_hat, pos_label=target_class, average="weighted")
-    precision = precision_score(Y, Y_hat, pos_label=target_class, average="weighted")
-    recall = recall_score(Y, Y_hat, pos_label=target_class, average="weighted")
-    y_true = np.where(Y == target_class, 1.0, 0.0)
-    auc = roc_auc_score(y_true, predictions["1"])
+    f1 = f1_score(Y, Y_hat, average="weighted")
+    precision = precision_score(Y, Y_hat, average="weighted")
+    recall = recall_score(Y, Y_hat, average="weighted")
+    # -------------------------------------
+    # auc calculation
+    name_to_idx_dict = {str(n): i for i, n in enumerate(pred_class_names)}
+    mapped_classes_true = Y.map(name_to_idx_dict)
+
+    auc = roc_auc_score(
+        mapped_classes_true,
+        predictions[pred_class_names].values,
+        labels=np.arange(len(pred_class_names)),
+        average="weighted",
+        multi_class="ovo",
+    )
+
+    # -------------------------------------
     scores = {
         "accuracy": np.round(accu, 4),
         "f1_score": np.round(f1, 4),
@@ -240,16 +247,20 @@ def save_test_outputs(results, run_hpt, dataset_name):
             "elapsed_time_in_minutes",
         ]
     ]
+
     print(df)
+
     file_path_and_name = get_file_path_and_name(run_hpt, dataset_name)
     df.to_csv(file_path_and_name, index=False)
 
 
+
 def save_local_explanations(local_explanations, dataset_name):
     if local_explanations is not None:
-        fname = f"{model_name}_{dataset_name}_local_explanations.csv"
+        fname = f"{model_name}_{dataset_name}_local_explanations.json"
         file_path_and_name = os.path.join(test_results_path, fname)
-        local_explanations.to_csv(file_path_and_name, index=False)
+        with open(file_path_and_name, "w") as f:
+            f.writelines(local_explanations)
 
 
 def get_file_path_and_name(run_hpt, dataset_name):
@@ -278,10 +289,10 @@ def run_train_and_test(dataset_name, run_hpt, num_hpt_trials):
         run_HPT(num_hpt_trials)  # run HPT and save tuned hyperparameters
     train_and_save_algo()  # train the model and save
 
-    (
-        results,
-        local_explanations,
-    ) = load_and_test_algo()  # load the trained model and get predictions on test data
+    # set_scoring_vars(dataset_name=dataset_name)
+    results, local_explanations = (
+        load_and_test_algo()
+    )  # load the trained model and get predictions on test data
 
     end = time.time()
     elapsed_time_in_minutes = np.round((end - start) / 60.0, 2)
@@ -301,7 +312,7 @@ def run_train_and_test(dataset_name, run_hpt, num_hpt_trials):
 
 if __name__ == "__main__":
 
-    num_hpt_trials = 30
+    num_hpt_trials = 10
     run_hpt_list = [False, True]
     run_hpt_list = [False]
 
@@ -317,17 +328,14 @@ if __name__ == "__main__":
         "steel_plate_fault",
         "vehicle_silhouettes",
     ]
-    datasets = "spotify_genre"
+    datasets = ["vehicle_silhouettes"]
 
     for run_hpt in run_hpt_list:
         all_results = []
-        local_explanations = []
         for dataset_name in datasets:
             print("-" * 60)
             print(f"Running dataset {dataset_name}")
-            results, local_explanations = run_train_and_test(
-                dataset_name, run_hpt, num_hpt_trials
-            )
+            results, local_explanations = run_train_and_test(dataset_name, run_hpt, num_hpt_trials)
             save_test_outputs(results, run_hpt, dataset_name)
             save_local_explanations(local_explanations, dataset_name)
             all_results.append(results)
