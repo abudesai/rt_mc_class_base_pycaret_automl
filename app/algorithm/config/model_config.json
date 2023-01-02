@@ -17,5 +17,6 @@
     "attr_type": "attributeType",
     "attr_name": "attributeName"
   },
-  "valid_split": 0.1
+  "valid_split": 0.1,
+  "max_resample_of_minority_classes": 5
 }

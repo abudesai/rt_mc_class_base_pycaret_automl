@@ -55,6 +55,7 @@ class Classifier:
             silent=True,
             verbose=False,
             session_id=42,
+            data_split_stratify=True
         )
 
         best_model = compare_models(verbose=False)
