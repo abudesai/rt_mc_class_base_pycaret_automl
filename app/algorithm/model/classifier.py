@@ -67,7 +67,7 @@ class Classifier:
 
 
     def predict_proba(self, X):
-        predictions = predict_model(self.model, X, raw_score=True)
+        predictions = predict_model(self.model, X, raw_score=True, round=6)
         """ pycaret returns a dataframe with 1 + c columns added to the end, where c is number of classes:
             'Label' which has the predicted class
             'Score_<class_0>' which has the predicted probability for the class with name "class_0"
@@ -83,7 +83,7 @@ class Classifier:
         return predictions[self.class_names]
 
     def predict(self, X):
-        preds = predict_model(self.model, X[self._categorical + self._numerical])
+        preds = predict_model(self.model, X[self._categorical + self._numerical], round=5)
         return preds[["Label"]]
 
 
