@@ -65,7 +65,6 @@ def get_resampled_data(data, target_field):
     # we sample. max_resample is that parameter - it represents max number of full population
     # resamples of the minority class. For this example, if max_resample is 3, then, we will only
     # repeat the minority class 2 times over (plus original 1 time).
-    print(data.shape, "data")
     y = data[target_field]
     max_resample = model_cfg["max_resample_of_minority_classes"]
     unique, class_count = np.unique(y, return_counts=True)
