@@ -328,7 +328,7 @@ if __name__ == "__main__":
         "steel_plate_fault",
         "vehicle_silhouettes",
     ]
-    datasets = ["vehicle_silhouettes"]
+    datasets = ["page_blocks"]
 
     for run_hpt in run_hpt_list:
         all_results = []

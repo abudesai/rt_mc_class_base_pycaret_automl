@@ -24,69 +24,67 @@ class Classifier:
         self.target_field = target_field
         self.id_field = id_field
         self.class_names = []
+        ''' 
+        we use the 'self.class_name_prefix' to alter the given class names (labels). 
+        More specifically, we concatenate with the prefix to ensure class names are strings. 
+        When classes are already strings, this is not needed. 
+        When pycaret sees numerical class names, it assumes the user has already encoded them as integers starting
+        at zero. This causes an exception when you have classes that dont start at zero, which is the case
+        with page blocks dataset.
+        '''
+        self.class_name_prefix = "__c__"
 
     def fit(self, train_data, _categorical, _numerical):
         self.class_names = sorted(
             train_data[self.target_field].drop_duplicates().tolist()
         )
+
+        train_data[self.target_field] = train_data[self.target_field].apply(
+            lambda c: f"{self.class_name_prefix}{c}"
+        )
+
         self._categorical = _categorical
         self._numerical = _numerical
 
-        all_features = [self.target_field] + self._categorical + self._numerical
+        all_features = self._categorical + self._numerical + [self.target_field]
         setup(
             data=train_data[all_features],
             target=self.target_field,
-            categorical_features=_categorical,
-            numeric_features=_numerical,
+            categorical_features=_categorical if len(_categorical) > 0 else None,
+            numeric_features=_numerical if len(_numerical) > 0 else None,
             silent=True,
             verbose=False,
             session_id=42,
         )
 
         best_model = compare_models(verbose=False)
-
         self.model = best_model
+
         metrics = pull()
         print(metrics)
         return self
 
-    def predict(self, X, verbose=False):
+
+    def predict_proba(self, X):
+        predictions = predict_model(self.model, X, raw_score=True)
+        """ pycaret returns a dataframe with 1 + c columns added to the end, where c is number of classes:
+            'Label' which has the predicted class
+            'Score_<class_0>' which has the predicted probability for the class with name "class_0"
+            'Score_<class_1>' which has the predicted probability for the class with name "class_1"
+            .
+            .
+
+            Below we will get the grab and return the probability columns
+        """    
+        score_columns = [f"Score_{self.class_name_prefix}{c}" for c in self.class_names]
+        predictions = predictions[score_columns]
+        predictions.columns = self.class_names  # rename with original class names
+        return predictions[self.class_names]
+
+    def predict(self, X):
         preds = predict_model(self.model, X[self._categorical + self._numerical])
         return preds[["Label"]]
 
-    def predict_proba(self, X, verbose=False):
-
-        predictions = predict_model(self.model, X[self._categorical + self._numerical])
-
-        """ pycaret returns a dataframe with two columns added to the end:
-            'Label' which has the predicted class
-            'Score' which has the predicted probability for the predicted class
-
-            Below we will process it into a dataframe with column headers as class names, and values
-            as the probabilities
-        """
-        # start with zero probabilities
-        processed_predictions = pd.DataFrame(
-            np.zeros(shape=(predictions.shape[0], len(self.class_names))), columns=self.class_names
-        )
-        # populate the probabilities for the two classes
-        for i, c in enumerate(self.class_names):
-            idx = predictions["Label"] == c
-            if i == 0:
-                processed_predictions.loc[idx, self.class_names[0]] = predictions.loc[
-                    idx, "Score"
-                ]
-                processed_predictions.loc[idx, self.class_names[1]] = (
-                    1 - predictions.loc[idx, "Score"]
-                )
-            else:
-                processed_predictions.loc[idx, self.class_names[1]] = predictions.loc[
-                    idx, "Score"
-                ]
-                processed_predictions.loc[idx, self.class_names[0]] = (
-                    1 - predictions.loc[idx, "Score"]
-                )
-        return processed_predictions
 
     def summary(self):
         self.model.get_params()
